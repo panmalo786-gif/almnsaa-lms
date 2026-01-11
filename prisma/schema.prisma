@@ -23,7 +23,7 @@ enum UserRole {
 }
 
 model School {
-  id                 String  @id @default(cuid())
+  id                 String  @id @default(uuid())
   name               String
   slug               String  @unique // For custom domain/url
   domain             String  @unique // For multi-tenancy domain routing
