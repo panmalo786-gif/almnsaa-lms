@@ -1,0 +1,484 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==============================
+// 1. User Management & Multi-Tenancy (B2B)
+// ==============================
+enum UserRole {
+  ADMIN
+  SCHOOL_MANAGER
+  TEACHER
+  STUDENT
+  PARENT
+  SUPERVISOR
+}
+
+model School {
+  id                 String  @id @default(cuid())
+  name               String
+  slug               String  @unique // For custom domain/url
+  logoUrl            String?
+  brandColor         String? @default("#2563eb") // Whitelabeling
+  settings           Json? // Flexible settings
+  subscriptionStatus String  @default("ACTIVE")
+
+  users     User[]
+  groups    Group[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([subscriptionStatus])
+}
+
+model Group {
+  id        String   @id @default(cuid())
+  name      String // e.g., "Class A - Riyadh"
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  students  User[]   @relation("GroupStudents")
+  createdAt DateTime @default(now())
+
+  @@index([schoolId])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique // Auth Provider Link
+  email     String   @unique
+  name      String?
+  role      UserRole @default(STUDENT)
+  avatarUrl String?
+  phone     String?
+
+  // Relations
+  schoolId String?
+  school   School? @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+
+  // Parent-Child Relation
+  parentId String?
+  parent   User?   @relation("ParentChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children User[]  @relation("ParentChildren")
+
+  // Group Relation
+  groups Group[] @relation("GroupStudents")
+
+  // Learning Data
+  enrollments  Enrollment[]
+  testAttempts TestAttempt[]
+  mastery      StudentMastery[]
+  studyPlans   StudyPlan[]
+  bookmarks    QuestionBookmark[]
+
+  // Gamification & System
+  points        Int            @default(0)
+  badges        UserBadge[]
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clerkId])
+  @@index([email])
+  @@index([schoolId])
+  @@index([role])
+  @@index([parentId])
+}
+
+// ==============================
+// 2. The Unified Taxonomy (The Brain)
+// ==============================
+enum TaxonomyType {
+  SUBJECT
+  BRANCH
+  SECTION
+  SKILL
+}
+
+model Taxonomy {
+  id       String       @id @default(cuid())
+  name     String
+  type     TaxonomyType
+  parentId String?
+  parent   Taxonomy?    @relation("Tree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Taxonomy[]   @relation("Tree")
+
+  masteryThreshold Int     @default(70) // Score needed to master this skill
+  order            Int     @default(0)
+  icon             String? // UI Icon
+
+  // Content Links
+  questions      Question[]
+  videos         Video[]
+  masteryRecords StudentMastery[]
+
+  @@index([parentId])
+  @@index([type])
+  @@index([parentId, type])
+}
+
+// ==============================
+// 3. Central Content Banks
+// ==============================
+enum QuestionType {
+  MCQ
+  TRUE_FALSE
+  MATCHING // Future proofing
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+model Video {
+  id         String  @id @default(cuid())
+  title      String
+  provider   String // 'MUX', 'VIMEO', 'YOUTUBE'
+  providerId String // The ID on the external platform
+  duration   Int // In Seconds (Crucial for Study Plan calculation)
+  transcript String? // For AI search
+
+  taxonomyId String
+  taxonomy   Taxonomy @relation(fields: [taxonomyId], references: [id], onDelete: Restrict)
+
+  courseLessons CourseLesson[]
+  createdAt     DateTime       @default(now())
+
+  @@index([taxonomyId])
+  @@index([provider, providerId])
+}
+
+model Question {
+  id         String       @id @default(cuid())
+  content    String // Rich Text (HTML/JSON)
+  type       QuestionType
+  difficulty Difficulty
+  taxonomyId String
+  taxonomy   Taxonomy     @relation(fields: [taxonomyId], references: [id], onDelete: Restrict)
+
+  explanationContent  String? // Text explanation
+  explanationVideoUrl String? // Video explanation
+  hint                String? // Helper text before answering
+  tags                String[] // Flexible tagging e.g. ["2024", "Importat"]
+
+  options        QuestionOption[]
+  quizQuestions  QuizQuestion[]
+  bookmarks      QuestionBookmark[]
+  attemptAnswers AttemptAnswer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taxonomyId])
+  @@index([type])
+  @@index([difficulty])
+  @@index([taxonomyId, difficulty])
+}
+
+model QuestionOption {
+  id         String   @id @default(cuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  text       String
+  isCorrect  Boolean
+  order      Int      @default(0)
+
+  @@index([questionId])
+}
+
+// ==============================
+// 4. Products, Courses & Sales
+// ==============================
+model Course {
+  id           String   @id @default(cuid())
+  title        String
+  slug         String   @unique
+  description  String?
+  thumbnailUrl String?
+  price        Decimal  @default(0)
+  salePrice    Decimal?
+  isPublished  Boolean  @default(false)
+
+  instructorId String
+
+  sections    CourseSection[]
+  enrollments Enrollment[]
+  coupons     Coupon[]
+  reviews     CourseReview[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([instructorId])
+  @@index([isPublished])
+}
+
+model CourseSection {
+  id       String         @id @default(cuid())
+  courseId String
+  course   Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  title    String
+  order    Int
+  lessons  CourseLesson[]
+
+  @@index([courseId])
+  @@index([courseId, order])
+}
+
+enum LessonType {
+  VIDEO
+  QUIZ
+  TEXT
+}
+
+model CourseLesson {
+  id            String        @id @default(cuid())
+  sectionId     String
+  section       CourseSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  title         String
+  type          LessonType
+  order         Int
+  isFreePreview Boolean       @default(false)
+
+  // Polymorphic-like links
+  videoId String?
+  video   Video?  @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  quizId  String?
+  quiz    Quiz?   @relation(fields: [quizId], references: [id], onDelete: SetNull)
+
+  @@index([sectionId])
+  @@index([sectionId, order])
+  @@index([videoId])
+  @@index([quizId])
+}
+
+model Coupon {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  discountPercent Int? // e.g., 20%
+  discountAmount  Decimal? // e.g., 50 SAR
+  maxUses         Int?
+  usedCount       Int       @default(0)
+  expiresAt       DateTime?
+  courseId        String?
+  course          Course?   @relation(fields: [courseId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([code])
+  @@index([courseId])
+  @@index([expiresAt])
+}
+
+model Enrollment {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  amountPaid Decimal
+  paymentId  String? // Transaction ID from Moyasar/Stripe
+  status     String // 'ACTIVE', 'EXPIRED', 'REFUNDED'
+  enrolledAt DateTime  @default(now())
+  expiresAt  DateTime?
+
+  @@unique([userId, courseId])
+  @@index([userId])
+  @@index([courseId])
+  @@index([status])
+  @@index([enrolledAt])
+}
+
+// ==============================
+// 5. Adaptive Engine & Testing
+// ==============================
+enum QuizType {
+  SAHER // Speed test (Blitz)
+  CENTRAL // Mock Exam
+  COURSE_QUIZ // Standard
+  REMEDIAL // AI Generated
+  DIAGNOSTIC // Placement test
+}
+
+model Quiz {
+  id           String   @id @default(cuid())
+  title        String
+  type         QuizType
+  timeLimit    Int? // Minutes (Null = Unlimited)
+  passingScore Int      @default(60)
+
+  questions     QuizQuestion[]
+  courseLessons CourseLesson[]
+  attempts      TestAttempt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+}
+
+model QuizQuestion {
+  id         String   @id @default(cuid())
+  quizId     String
+  quiz       Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  order      Int
+
+  @@unique([quizId, questionId])
+  @@index([quizId])
+  @@index([questionId])
+  @@index([quizId, order])
+}
+
+model TestAttempt {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quizId String
+  quiz   Quiz   @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  score     Float
+  isPassed  Boolean
+  timeSpent Int // Seconds (For Saher Analysis)
+  status    String // 'IN_PROGRESS', 'COMPLETED', 'ABANDONED'
+
+  answers AttemptAnswer[]
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([userId])
+  @@index([quizId])
+  @@index([userId, quizId])
+  @@index([status])
+  @@index([startedAt])
+  @@index([completedAt])
+}
+
+model AttemptAnswer {
+  id         String      @id @default(cuid())
+  attemptId  String
+  attempt    TestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  selectedOptionId String?
+  isCorrect        Boolean
+  timeSpent        Int // Seconds spent on THIS specific question
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+  @@index([questionId])
+  @@index([isCorrect])
+}
+
+model StudentMastery {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taxonomyId String
+  taxonomy   Taxonomy @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
+
+  proficiency Float // 0 to 100
+  status      String // 'WEAK', 'DEVELOPING', 'MASTERED'
+  lastUpdated DateTime @default(now())
+
+  @@unique([userId, taxonomyId]) // Critical Index
+  @@index([userId])
+  @@index([taxonomyId])
+  @@index([status])
+  @@index([proficiency])
+}
+
+// ==============================
+// 6. Student Features & Extras
+// ==============================
+model StudyPlan {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId String
+
+  targetDate DateTime
+  dailyHours Int
+  schedule   Json // The generated calendar
+  status     String // 'ACTIVE', 'COMPLETED'
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+  @@index([courseId])
+  @@index([status])
+  @@index([targetDate])
+}
+
+model QuestionBookmark {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  note       String? // Optional private note
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, questionId])
+  @@index([userId])
+  @@index([questionId])
+}
+
+model CourseReview {
+  id        String   @id @default(cuid())
+  userId    String
+  courseId  String
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  rating    Int // 1-5
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, courseId])
+  @@index([courseId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  type      String // 'SYSTEM', 'ACADEMIC', 'PROMO'
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model UserBadge {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeName String // e.g. "Math Wizard"
+  awardedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([badgeName])
+  @@index([awardedAt])
+}
